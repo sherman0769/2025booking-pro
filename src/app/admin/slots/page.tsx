@@ -3,321 +3,231 @@
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "@/lib/firebase.client";
 import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  runTransaction,
-  Timestamp,
-  updateDoc,
-  where,
-  serverTimestamp,
-} from "firebase/firestore";
+import { collection, getDocs, doc, getDoc, setDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 
-type SlotDoc = {
-  resourceId: string;
-  serviceId: string;
-  startAt: Timestamp;
-  endAt: Timestamp;
-  status?: "OPEN" | "CLOSED" | "FULL";
-  capacity?: number;
-};
+type Option = { id: string; name: string };
 
-type Row = {
-  id: string;
-  startAt: Date;
-  endAt: Date;
-  serviceName: string;
-  resourceName: string;
-  capacity: number;
-  status: "OPEN" | "CLOSED" | "FULL";
-};
+function combineDateTime(date: string, time: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  return new Date(y, m - 1, d, hh, mm, 0);
+}
 
-export default function AdminSlotManagePage() {
+export default function AdminSlotsGenerator() {
   const [user, setUser] = useState<User | null>(null);
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null); // "ADMIN" | "MEMBER" | null
+  const [resources, setResources] = useState<Option[]>([]);
+  const [services, setServices] = useState<Option[]>([]);
+  const [resourceId, setResourceId] = useState("");
+  const [serviceId, setServiceId] = useState("");
 
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(todayISO);
+  const [endDate, setEndDate] = useState(todayISO);
+  const [startTime, setStartTime] = useState("10:00");
+  const [endTime, setEndTime] = useState("18:00");
+  const [durationMin, setDurationMin] = useState(60);
+  const [gapMin, setGapMin] = useState(0);
+  const [capacity, setCapacity] = useState(1);
+  const [dow, setDow] = useState<Set<number>>(new Set([0,1,2,3,4,5,6]));
+
+  const [status, setStatus] = useState<string>("就緒");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // 登入 + 角色
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (!u) {
+        await signInAnonymously(auth).catch(() => {});
+        setRole(null);
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, "userRoles", u.uid));
+        setRole(snap.exists() ? ((snap.data() as any).role ?? "MEMBER") : "MEMBER");
+      } catch {
+        setRole("MEMBER");
+      }
+    });
     return () => unsub();
   }, []);
 
-  const ensureSignedIn = async () => {
-    if (!auth.currentUser) await signInAnonymously(auth);
-  };
+  const ensureSignedIn = async () => { if (!auth.currentUser) await signInAnonymously(auth); };
 
-  const load = async () => {
-    setLoading(true);
-    setMsg(null);
-    setError(null);
-    try {
-      await ensureSignedIn();
-
-      const now = Timestamp.now();
-      const sevenDaysLater = Timestamp.fromDate(
-        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      );
-
-      const qy = query(
-        collection(db, "slots"),
-        where("startAt", ">=", now),
-        where("startAt", "<=", sevenDaysLater),
-        orderBy("startAt", "asc"),
-        limit(100)
-      );
-      const snap = await getDocs(qy);
-
-      const list: Row[] = await Promise.all(
-        snap.docs.map(async (d) => {
-          const s = d.data() as SlotDoc;
-          const [svcSnap, resSnap] = await Promise.all([
-            getDoc(doc(db, "services", s.serviceId)),
-            getDoc(doc(db, "resources", s.resourceId)),
-          ]);
-          return {
-            id: d.id,
-            startAt: s.startAt.toDate(),
-            endAt: s.endAt.toDate(),
-            serviceName: svcSnap.exists() ? ((svcSnap.data() as any).name ?? "") : "",
-            resourceName: resSnap.exists() ? ((resSnap.data() as any).name ?? "") : "",
-            capacity: s.capacity ?? 1,
-            status: (s.status ?? "OPEN") as Row["status"],
-          };
-        })
-      );
-
-      setRows(list);
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // 載入選項
   useEffect(() => {
-    load();
+    (async () => {
+      await ensureSignedIn();
+      const [resSnap, svcSnap] = await Promise.all([
+        getDocs(collection(db, "resources")),
+        getDocs(collection(db, "services")),
+      ]);
+      const res: Option[] = resSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name ?? d.id }));
+      const svc: Option[] = svcSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name ?? d.id }));
+      setResources(res);
+      setServices(svc);
+      if (!resourceId && res[0]) setResourceId(res[0].id);
+      if (!serviceId && svc[0]) setServiceId(svc[0].id);
+    })().catch(e => setError(e?.message ?? String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fmt = (d: Date) =>
-    d.toLocaleString("zh-TW", {
-      timeZone: "Asia/Taipei",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-
-  const toggleStatus = async (r: Row) => {
-    setMsg(null);
-    setError(null);
-    try {
-      await ensureSignedIn();
-      const ref = doc(db, "slots", r.id);
-      if (r.status === "CLOSED") {
-        await updateDoc(ref, {
-          status: "OPEN",
-          capacity: r.capacity > 0 ? r.capacity : 1,
-        });
-        setMsg("已開啟此時段 ✅");
-      } else {
-        await updateDoc(ref, { status: "CLOSED" });
-        setMsg("已關閉此時段 ✅");
-      }
-      await load();
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    }
+  const toggleDow = (d: number) => {
+    const next = new Set(dow);
+    next.has(d) ? next.delete(d) : next.add(d);
+    setDow(next);
   };
 
-  const changeCapacity = async (r: Row, delta: number) => {
-    setMsg(null);
-    setError(null);
+  const generate = async () => {
     try {
-      await ensureSignedIn();
-      await runTransaction(db, async (tx) => {
-        const ref = doc(db, "slots", r.id);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error("時段不存在");
-        const s = snap.data() as SlotDoc;
-        const cap = Math.max(0, (s.capacity ?? 1) + delta);
-        let status: Row["status"] = (s.status ?? "OPEN") as Row["status"];
-        if (cap === 0) status = "FULL";
-        else if (status !== "CLOSED") status = "OPEN";
-        tx.update(ref, { capacity: cap, status });
-      });
-      setMsg("容量已更新 ✅");
-      await load();
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    }
-  };
+      setBusy(true); setError(null); setStatus("產生中…");
+      if (!resourceId || !serviceId) throw new Error("請選擇資源與服務");
+      if (durationMin <= 0) throw new Error("時段長度需大於 0");
+      const start = new Date(startDate); const end = new Date(endDate);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) throw new Error("日期不正確");
+      if (start > end) throw new Error("起訖日期不正確");
+      const stepMs = (durationMin + gapMin) * 60 * 1000;
 
-  /**
-   * 從候補補位（優先使用需要索引的查詢；若拋出 requires index，就改用「無排序查詢 → 前端排序」的備援）
-   */
-  const fillFromWaitlist = async (r: Row) => {
-    setMsg(null);
-    setError(null);
-    try {
-      await ensureSignedIn();
+      let created = 0, skipped = 0;
 
-      // 1) 嘗試：依 createdAt ASC 取最早一位（需要複合索引：slotId ASC + createdAt ASC）
-      let wlDocId: string | null = null;
-      let wlUid: string | null = null;
+      for (let day = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+           day <= end;
+           day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+        if (!dow.has(day.getDay())) continue;
 
-      try {
-        const wlQ = query(
-          collection(db, "waitlists"),
-          where("slotId", "==", r.id),
-          orderBy("createdAt", "asc"),
-          limit(1)
-        );
-        const wlSnap = await getDocs(wlQ);
-        if (!wlSnap.empty) {
-          wlDocId = wlSnap.docs[0].id;
-          wlUid = (wlSnap.docs[0].data() as any).uid ?? null;
-        }
-      } catch (err: any) {
-        // 備援路徑：只用 where(slotId==)（不需要索引），取前 50 筆後用前端排序
-        const wlQ2 = query(
-          collection(db, "waitlists"),
-          where("slotId", "==", r.id),
-          limit(50)
-        );
-        const wlSnap2 = await getDocs(wlQ2);
-        const list = wlSnap2.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .sort(
-            (a, b) =>
-              (a.createdAt?.toMillis?.() ?? 0) -
-              (b.createdAt?.toMillis?.() ?? 0)
-          );
-        if (list.length > 0) {
-          wlDocId = list[0].id;
-          wlUid = list[0].uid ?? null;
+        const dateISO = day.toISOString().slice(0,10);
+        const dayStart = combineDateTime(dateISO, startTime);
+        const dayEnd   = combineDateTime(dateISO, endTime);
+        if (dayStart >= dayEnd) continue;
+
+        for (let cur = dayStart; cur < dayEnd; cur = new Date(cur.getTime() + stepMs)) {
+          const slotStart = cur;
+          const slotEnd = new Date(cur.getTime() + durationMin * 60 * 1000);
+          if (slotEnd > dayEnd) break;
+
+          const slotId = `${resourceId}_${slotStart.getTime()}`;
+          const ref = doc(db, "slots", slotId);
+          const exists = await getDoc(ref);
+          if (exists.exists()) { skipped++; continue; }
+
+          await setDoc(ref, {
+            resourceId, serviceId,
+            startAt: Timestamp.fromDate(slotStart),
+            endAt:   Timestamp.fromDate(slotEnd),
+            status: "OPEN", capacity,
+            createdAt: serverTimestamp(),
+          });
+          created++;
         }
       }
 
-      if (!wlDocId || !wlUid) throw new Error("此時段沒有候補名單");
-
-      // 2) 進行補位（交易：容量 -1、建立 booking、建立唯一鍵、刪除候補）
-      await runTransaction(db, async (tx) => {
-        const slotRef = doc(db, "slots", r.id);
-        const keyRef = doc(db, "bookingKeys", `${r.id}_${wlUid}`);
-        const slotSnap = await tx.get(slotRef);
-        if (!slotSnap.exists()) throw new Error("時段不存在");
-
-        const s = slotSnap.data() as SlotDoc;
-        const cap = s.capacity ?? 0;
-        const status = s.status ?? "OPEN";
-        if (status !== "OPEN") throw new Error("此時段非開放狀態");
-        if (cap <= 0) throw new Error("此時段目前沒有可用名額");
-
-        const keySnap = await tx.get(keyRef);
-        if (keySnap.exists()) throw new Error("此用戶已有預約");
-
-        const newCap = cap - 1;
-        tx.update(slotRef, {
-          capacity: newCap,
-          status: newCap <= 0 ? "FULL" : status,
-        });
-
-        const bookingRef = doc(collection(db, "bookings"));
-        tx.set(bookingRef, {
-          slotId: r.id,
-          serviceId: s.serviceId,
-          resourceId: s.resourceId,
-          uid: wlUid,
-          status: "PENDING",
-          source: "ADMIN",
-          createdAt: serverTimestamp(),
-        });
-
-        tx.set(keyRef, {
-          uid: wlUid,
-          slotId: r.id,
-          bookingId: bookingRef.id,
-          createdAt: serverTimestamp(),
-        });
-
-        tx.delete(doc(db, "waitlists", wlDocId!));
-      });
-
-      setMsg("已從候補補位一人 ✅");
-      await load();
+      setStatus(`完成：建立 ${created} 筆，略過 ${skipped} 筆 ✅`);
     } catch (e: any) {
       setError(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
-  const hasData = useMemo(() => rows.length > 0, [rows]);
+  const fmtDow = (d: number) => ["日","一","二","三","四","五","六"][d];
+  const canSubmit = useMemo(() => !!resourceId && !!serviceId && !busy, [resourceId, serviceId, busy]);
+
+  // —— 權限保護（403） ——
+  if (role === null) return <main className="p-6">載入權限中…</main>;
+  if (role !== "ADMIN") {
+    return (
+      <main className="p-6 space-y-3">
+        <h1 className="text-2xl font-bold">管理端｜排程產生器</h1>
+        <div className="p-3 rounded border bg-red-50 text-red-700">
+          403｜你沒有權限檢視此頁（需要 ADMIN 角色）。
+        </div>
+        <div className="text-sm text-gray-600">
+          若為開發測試，可到 <code>/debug/grant-admin</code> 先授予自己 ADMIN。
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">管理端｜時段管理</h1>
-      <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? "(未登入)"}</div>
+      <h1 className="text-2xl font-bold">管理端｜排程產生器</h1>
+      <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? "(未登入)"}　角色：{role}</div>
 
-      <div className="flex gap-2">
-        <button
-          onClick={load}
-          className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-          disabled={loading}
-        >
-          {loading ? "載入中…" : "重新整理"}
-        </button>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-1">
+          <div className="text-sm">資源（教練/房間）</div>
+          <select className="border p-2 rounded w-full" value={resourceId} onChange={e=>setResourceId(e.target.value)}>
+            {resources.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </label>
+
+        <label className="space-y-1">
+          <div className="text-sm">服務</div>
+          <select className="border p-2 rounded w-full" value={serviceId} onChange={e=>setServiceId(e.target.value)}>
+            {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+
+        <label className="space-y-1">
+          <div className="text-sm">起始日期</div>
+          <input type="date" className="border p-2 rounded w-full" value={startDate} onChange={e=>setStartDate(e.target.value)} />
+        </label>
+        <label className="space-y-1">
+          <div className="text-sm">結束日期（含）</div>
+          <input type="date" className="border p-2 rounded w-full" value={endDate} onChange={e=>setEndDate(e.target.value)} />
+        </label>
+
+        <label className="space-y-1">
+          <div className="text-sm">每日開始時間</div>
+          <input type="time" className="border p-2 rounded w-full" value={startTime} onChange={e=>setStartTime(e.target.value)} />
+        </label>
+        <label className="space-y-1">
+          <div className="text-sm">每日結束時間</div>
+          <input type="time" className="border p-2 rounded w-full" value={endTime} onChange={e=>setEndTime(e.target.value)} />
+        </label>
+
+        <label className="space-y-1">
+          <div className="text-sm">時段長度（分鐘）</div>
+          <input type="number" className="border p-2 rounded w-full" value={durationMin} onChange={e=>setDurationMin(parseInt(e.target.value||"0"))} />
+        </label>
+        <label className="space-y-1">
+          <div className="text-sm">時段間隔（分鐘）</div>
+          <input type="number" className="border p-2 rounded w-full" value={gapMin} onChange={e=>setGapMin(parseInt(e.target.value||"0"))} />
+        </label>
+
+        <label className="space-y-1">
+          <div className="text-sm">容量（每時段可預約人數）</div>
+          <input type="number" className="border p-2 rounded w-full" value={capacity} onChange={e=>setCapacity(parseInt(e.target.value||"1"))} />
+        </label>
       </div>
 
-      {msg && (
-        <div className="p-3 bg-green-50 text-green-700 rounded border border-green-200">{msg}</div>
-      )}
-      {error && (
-        <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{error}</div>
-      )}
-      {!hasData && !loading && (
-        <div className="text-gray-500">未來 7 天沒有時段。</div>
-      )}
+      <div className="space-y-2">
+        <div className="text-sm">適用星期</div>
+        <div className="flex flex-wrap gap-2">
+          {[0,1,2,3,4,5,6].map(d => (
+            <label key={d} className="inline-flex items-center gap-1">
+              <input type="checkbox" checked={dow.has(d)} onChange={()=>toggleDow(d)} />
+              <span>週{fmtDow(d)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
 
-      <ul className="divide-y">
-        {rows.map((r) => (
-          <li key={r.id} className="py-3 flex flex-col gap-2">
-            <div className="font-medium">
-              {fmt(r.startAt)} — {fmt(r.endAt)}
-            </div>
-            <div className="text-sm text-gray-600">
-              服務：{r.serviceName}　資源：{r.resourceName}
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <span>狀態：{r.status}</span>
-              <button onClick={() => toggleStatus(r)} className="px-3 py-1 rounded bg-black text-white">
-                {r.status === "CLOSED" ? "開啟" : "關閉"}
-              </button>
+      <button
+        onClick={generate}
+        disabled={!canSubmit}
+        className="px-4 py-2 rounded text-white bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {busy ? "產生中…" : "批量產生時段"}
+      </button>
 
-              <span className="ml-2">容量：{r.capacity}</span>
-              <div className="inline-flex gap-1">
-                <button onClick={() => changeCapacity(r, -1)} className="px-2 py-1 rounded bg-black text-white">-1</button>
-                <button onClick={() => changeCapacity(r, +1)} className="px-2 py-1 rounded bg-black text-white">+1</button>
-              </div>
-
-              <button onClick={() => fillFromWaitlist(r)} className="ml-4 px-3 py-1 rounded bg-black text-white">
-                從候補補位
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {error && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{error}</div>}
+      <div className="text-sm text-gray-700">{status}</div>
 
       <p className="text-xs text-gray-500">
-        注意：目前規則允許任何已登入者（含匿名）操作資料，僅供開發測試；上線前會加入角色保護與更嚴格規則。
+        備註：為避免重複，系統用「resourceId + 開始時間毫秒」作為 slot docId；已存在則略過。
       </p>
     </main>
   );

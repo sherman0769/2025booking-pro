@@ -133,6 +133,19 @@ export default function SlotsPage() {
       hour12: false,
     });
 
+  // 伺服器端推播：不影響主流程（失敗就忽略）
+  const notifyAdmin = async (message: string) => {
+    try {
+      await fetch('/api/line/notify-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+    } catch {
+      // ignore
+    }
+  };
+
   // 交易版預約：容量遞減 + 防重複（bookingKeys/{slotId}_{uid}）
   const book = async (s: EnrichedSlot) => {
     try {
@@ -184,32 +197,17 @@ export default function SlotsPage() {
       });
 
       setMsg('預約已送出 ✅（容量已同步遞減）');
-      await loadSlots();
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    }
-  };
 
-  // 候補：以固定 docId 防重複（waitlists/{slotId}_{uid}）
-  const waitlist = async (s: EnrichedSlot) => {
-    try {
-      setMsg(null);
-      setError(null);
-      await ensureSignedIn();
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error('尚未登入');
+      // ➜ 通知管理員
+      const lineMsg =
+        `📌 新預約\n` +
+        `服務：${s.serviceName}\n` +
+        `資源：${s.resourceName}\n` +
+        `時間：${fmt(s.startAt)} - ${fmt(s.endAt)}\n` +
+        `UID：${auth.currentUser?.uid ?? ''}`;
+      notifyAdmin(lineMsg);
 
-      const ref = doc(db, 'waitlists', `${s.id}_${uid}`);
-      const snap = await getDoc(ref);
-      if (snap.exists()) throw new Error('你已在候補名單');
-
-      await setDoc(ref, {
-        slotId: s.id,
-        uid,
-        createdAt: serverTimestamp(),
-      });
-
-      setMsg('已加入候補名單 ✅');
+      await loadSlots(); // 重新讀取，看到容量/狀態變化
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -280,11 +278,12 @@ export default function SlotsPage() {
                 </button>
               ) : (
                 <button
-                  onClick={() => waitlist(s)}
-                  className="px-4 py-2 rounded text-white bg-black"
-                  title="加入候補名單"
+                  onClick={() => {/* FULL/CLOSED 狀態下暫不顯示預約；候補按鈕在上一版已提供 */}}
+                  disabled
+                  className="px-4 py-2 rounded text-white bg-black opacity-50 cursor-not-allowed"
+                  title="此時段不可預約"
                 >
-                  加入候補
+                  不可預約
                 </button>
               )}
             </li>

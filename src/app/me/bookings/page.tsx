@@ -59,7 +59,6 @@ export default function MyBookingsPage() {
       await ensureSignedIn();
       const uid = auth.currentUser!.uid;
 
-      // 只用 where 避免需要複合索引，再在前端排序
       const qy = query(
         collection(db, 'bookings'),
         where('uid', '==', uid),
@@ -95,7 +94,6 @@ export default function MyBookingsPage() {
         }),
       );
 
-      // 依 createdAt DESC 排序（null 放最後）
       items.sort(
         (a, b) =>
           (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0),
@@ -127,6 +125,17 @@ export default function MyBookingsPage() {
         })
       : '(無資料)';
 
+  // 給管理員的伺服器端推播（失敗不影響流程）
+  const notifyAdmin = async (message: string) => {
+    try {
+      await fetch('/api/line/notify-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+    } catch {}
+  };
+
   const cancelBooking = async (row: any) => {
     setMsg(null);
     setError(null);
@@ -152,24 +161,31 @@ export default function MyBookingsPage() {
         const cap = slot.capacity ?? 0;
         const newCap = cap + 1;
 
-        // 1) 回存 slot 容量與狀態
         tx.update(slotRef, {
           capacity: newCap,
           status: 'OPEN',
         });
 
-        // 2) 標示 booking 已取消
         tx.update(bookingRef, {
           status: 'CANCELED',
           canceledAt: serverTimestamp(),
         });
 
-        // 3) 刪除唯一鍵（讓同人可重新預約）
         const keyRef = doc(db, 'bookingKeys', `${b.slotId}_${uid}`);
         tx.delete(keyRef);
       });
 
       setMsg('已取消預約 ✅（名額已釋回）');
+
+      // ➜ 通知管理員
+      const lineMsg =
+        `⚠️ 使用者取消預約\n` +
+        `服務：${row.serviceName}\n` +
+        `資源：${row.resourceName}\n` +
+        `時間：${fmt(row.startAt)} - ${fmt(row.endAt)}\n` +
+        `UID：${auth.currentUser?.uid ?? ''}`;
+      notifyAdmin(lineMsg);
+
       await load();
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -225,9 +241,7 @@ export default function MyBookingsPage() {
                 <div className="text-sm text-gray-600">
                   服務：{r.serviceName}　資源：{r.resourceName}
                 </div>
-                <div className="text-xs text-gray-500">
-                  狀態：{r.status}
-                </div>
+                <div className="text-xs text-gray-500">狀態：{r.status}</div>
               </div>
 
               <button
