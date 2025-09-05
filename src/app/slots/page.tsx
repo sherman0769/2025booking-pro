@@ -146,6 +146,17 @@ export default function SlotsPage() {
     }
   };
 
+  // 對學員本人的推播（失敗不影響流程；若未綁定會被略過）
+  const notifyUser = async (uid: string, message: string) => {
+    try {
+      await fetch('/api/line/notify-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, message }),
+      });
+    } catch {}
+  };
+
   // 交易版預約：容量遞減 + 防重複（bookingKeys/{slotId}_{uid}）
   const book = async (s: EnrichedSlot) => {
     try {
@@ -199,13 +210,23 @@ export default function SlotsPage() {
       setMsg('預約已送出 ✅（容量已同步遞減）');
 
       // ➜ 通知管理員
-      const lineMsg =
+      const adminMsg =
         `📌 新預約\n` +
         `服務：${s.serviceName}\n` +
         `資源：${s.resourceName}\n` +
         `時間：${fmt(s.startAt)} - ${fmt(s.endAt)}\n` +
         `UID：${auth.currentUser?.uid ?? ''}`;
-      notifyAdmin(lineMsg);
+      notifyAdmin(adminMsg);
+
+      // ➜ 通知學員本人（若已綁定 lineUserId 才會送出）
+      const uid = auth.currentUser?.uid!;
+      const userMsg =
+        `✅ 預約成立\n` +
+        `服務：${s.serviceName}\n` +
+        `資源：${s.resourceName}\n` +
+        `時間：${fmt(s.startAt)} - ${fmt(s.endAt)}\n` +
+        `查詢：/me/bookings`;
+      notifyUser(uid, userMsg);
 
       await loadSlots(); // 重新讀取，看到容量/狀態變化
     } catch (e: any) {
