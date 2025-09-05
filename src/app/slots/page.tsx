@@ -49,6 +49,7 @@ export default function SlotsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // 追蹤登入狀態
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
     return () => unsub();
@@ -58,6 +59,7 @@ export default function SlotsPage() {
     if (!auth.currentUser) await signInAnonymously(auth);
   };
 
+  // 載入未來 7 天的可預約時段
   const loadSlots = async () => {
     setLoading(true);
     setError(null);
@@ -133,7 +135,7 @@ export default function SlotsPage() {
       hour12: false,
     });
 
-  // 伺服器端推播：不影響主流程（失敗就忽略）
+  // 伺服器端推播：管理員（失敗不影響主流程）
   const notifyAdmin = async (message: string) => {
     try {
       await fetch('/api/line/notify-admin', {
@@ -141,62 +143,34 @@ export default function SlotsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
       });
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
-  // 對學員本人的推播（先從 userProfiles 取 lineUserId；本機也能送）
+  // 伺服器端推播：學員本人（若未綁定會被 API 略過）
+  // 本機也會先讀 userProfiles 取得 lineUserId 一併帶上，無 Admin 金鑰也能送
   const notifyUser = async (uid: string, message: string) => {
     try {
-      // 讀自己 profile 的 lineUserId（規則允許本人讀）
       const snap = await getDoc(doc(db, 'userProfiles', uid));
-      const toLineUserId = snap.exists() ? (snap.data() as any)?.lineUserId ?? null : null;
+      const toLineUserId = snap.exists()
+        ? (snap.data() as any)?.lineUserId ?? null
+        : null;
 
       await fetch('/api/line/notify-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // 兩個都傳：遠端會用 uid 查；本機沒有 Admin 金鑰就用 toLineUserId 直接推
         body: JSON.stringify({ uid, toLineUserId, message }),
       });
-    } catch {
-      // 忽略錯誤，不影響主要流程
-    }
+    } catch {}
   };
 
-  // 加入候補（以固定 docId 防重複：waitlists/{slotId}_{uid}）
-  const waitlist = async (s: EnrichedSlot) => {
-    try {
-      await ensureSignedIn();
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error('尚未登入');
-
-      // 先看是否已在候補
-      const ref = doc(db, 'waitlists', `${s.id}_${uid}`);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        setMsg('你已在候補名單');
-        return;
-      }
-
-      await setDoc(ref, {
-        slotId: s.id,
-        uid,
-        createdAt: serverTimestamp(),
-      });
-      setMsg('已加入候補名單 ✅');
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    }
-  };
-
-  // 交易版預約：容量遞減 + 防重複（bookingKeys/{slotId}_{uid}）
+  // 預約（交易：容量遞減 + 防重複）
   const book = async (s: EnrichedSlot) => {
     try {
       setMsg(null);
       setError(null);
       await ensureSignedIn();
-      
+
+      const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('尚未登入');
 
       await runTransaction(db, async (tx) => {
@@ -242,7 +216,7 @@ export default function SlotsPage() {
 
       setMsg('預約已送出 ✅（容量已同步遞減）');
 
-      // ➜ 通知管理員
+      // 通知管理員
       const adminMsg =
         `📌 新預約\n` +
         `服務：${s.serviceName}\n` +
@@ -251,16 +225,42 @@ export default function SlotsPage() {
         `UID：${auth.currentUser?.uid ?? ''}`;
       notifyAdmin(adminMsg);
 
-      // ➜ 通知學員本人（若已綁定 lineUserId 才會送出）
-const userMsg =
+      // 通知學員本人
+      const userMsg =
         `✅ 預約成立\n` +
         `服務：${s.serviceName}\n` +
         `資源：${s.resourceName}\n` +
         `時間：${fmt(s.startAt)} - ${fmt(s.endAt)}\n` +
         `查詢：/me/bookings`;
-      notifyUser(uid, userMsg);
+      await notifyUser(uid, userMsg);
 
       await loadSlots(); // 重新讀取，看到容量/狀態變化
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    }
+  };
+
+  // 加入候補（固定 docId：waitlists/{slotId}_{uid}；重複加入會提示）
+  const waitlist = async (s: EnrichedSlot) => {
+    try {
+      await ensureSignedIn();
+      const uid = auth.currentUser?.uid;
+      if (!uid) throw new Error('尚未登入');
+
+      const ref = doc(db, 'waitlists', `${s.id}_${uid}`);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        setMsg('你已在候補名單');
+        return;
+      }
+
+      await setDoc(ref, {
+        slotId: s.id,
+        uid,
+        createdAt: serverTimestamp(),
+      });
+
+      setMsg('已加入候補名單 ✅');
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -304,6 +304,8 @@ const userMsg =
         {slots.map((s) => {
           const cap = s.capacity ?? 0;
           const isOpen = s.status === 'OPEN' && cap > 0;
+          const isFull = s.status === 'FULL' || cap <= 0;
+
           return (
             <li
               key={s.id}
@@ -329,13 +331,21 @@ const userMsg =
                 >
                   預約
                 </button>
-              ) : (
+              ) : isFull ? (
                 <button
                   onClick={() => waitlist(s)}
                   className="px-4 py-2 rounded text-white bg-black"
                   title="加入候補名單"
                 >
                   加入候補
+                </button>
+              ) : (
+                <button
+                  disabled
+                  className="px-4 py-2 rounded text-white bg-black opacity-50 cursor-not-allowed"
+                  title="此時段不可預約"
+                >
+                  不可預約
                 </button>
               )}
             </li>
