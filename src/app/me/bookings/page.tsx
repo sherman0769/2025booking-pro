@@ -136,6 +136,21 @@ export default function MyBookingsPage() {
     } catch {}
   };
 
+  // 對學員本人的推播（若未綁定會被略過）
+  const notifyUser = async (uid: string, message: string) => {
+    try {
+      // 也嘗試直接讀自己的 lineUserId，讓本機無 Admin 金鑰也能送
+      const snap = await getDoc(doc(db, 'userProfiles', uid));
+      const toLineUserId = snap.exists() ? (snap.data() as any)?.lineUserId ?? null : null;
+
+      await fetch('/api/line/notify-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, toLineUserId, message }),
+      });
+    } catch {}
+  };
+
   const cancelBooking = async (row: any) => {
     setMsg(null);
     setError(null);
@@ -178,13 +193,22 @@ export default function MyBookingsPage() {
       setMsg('已取消預約 ✅（名額已釋回）');
 
       // ➜ 通知管理員
-      const lineMsg =
+      const adminMsg =
         `⚠️ 使用者取消預約\n` +
         `服務：${row.serviceName}\n` +
         `資源：${row.resourceName}\n` +
         `時間：${fmt(row.startAt)} - ${fmt(row.endAt)}\n` +
         `UID：${auth.currentUser?.uid ?? ''}`;
-      notifyAdmin(lineMsg);
+      notifyAdmin(adminMsg);
+
+      // ➜ 通知學員本人
+      const userMsg =
+        `❌ 已取消預約\n` +
+        `服務：${row.serviceName}\n` +
+        `資源：${row.resourceName}\n` +
+        `時間：${fmt(row.startAt)} - ${fmt(row.endAt)}\n` +
+        `如需再次預約請前往：/slots`;
+      notifyUser(uid, userMsg);
 
       await load();
     } catch (e: any) {

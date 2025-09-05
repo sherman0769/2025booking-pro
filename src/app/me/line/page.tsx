@@ -6,12 +6,7 @@ import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 const ALPH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去除易混淆字元
-
-function genCode(n = 6) {
-  let s = "";
-  for (let i = 0; i < n; i++) s += ALPH[Math.floor(Math.random() * ALPH.length)];
-  return s;
-}
+function genCode(n = 6) { let s = ""; for (let i = 0; i < n; i++) s += ALPH[Math.floor(Math.random() * ALPH.length)]; return s; }
 
 export default function BindLinePage() {
   const [user, setUser] = useState<User | null>(null);
@@ -43,9 +38,7 @@ export default function BindLinePage() {
         setLineUserId(null);
         setBindCode(null);
       }
-    } finally {
-      setNote("");
-    }
+    } finally { setNote(""); }
   };
 
   const makeCode = async () => {
@@ -60,19 +53,42 @@ export default function BindLinePage() {
       );
       setBindCode(code);
       setNote("已產生綁定碼 ✅");
-    } catch (e: any) {
-      setNote("產生失敗：" + (e?.message ?? e));
-    }
+    } catch (e: any) { setNote("產生失敗：" + (e?.message ?? e)); }
+  };
+
+  // 解除綁定（清除 lineUserId 與 bindCode）
+  const unbind = async () => {
+    setNote("解除綁定中…");
+    try {
+      if (!auth.currentUser) throw new Error("尚未登入");
+      await setDoc(
+        doc(db, "userProfiles", auth.currentUser.uid),
+        { lineUserId: null, bindCode: null, unboundAt: serverTimestamp() },
+        { merge: true }
+      );
+      await reloadProfile();
+      setNote("已解除綁定 ✅");
+    } catch (e: any) { setNote("解除失敗：" + (e?.message ?? e)); }
   };
 
   return (
     <main className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">綁定 LINE 通知（免貼 userId）</h1>
+      <h1 className="text-2xl font-bold">綁定 LINE 通知</h1>
       <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? "(未登入)"}</div>
 
       {lineUserId ? (
-        <div className="p-3 rounded border bg-green-50 text-green-700">
-          已綁定 LINE（userId: {lineUserId}）
+        <div className="space-y-3">
+          <div className="p-3 rounded border bg-green-50 text-green-700">
+            已綁定 LINE（userId: {lineUserId}）
+          </div>
+          <div className="flex gap-2">
+            <button onClick={unbind} className="px-4 py-2 rounded bg-black text-white">
+              解除綁定
+            </button>
+            <button onClick={() => reloadProfile()} className="px-4 py-2 rounded bg-black text-white">
+              重新整理
+            </button>
+          </div>
         </div>
       ) : (
         <>
@@ -80,10 +96,10 @@ export default function BindLinePage() {
             <div className="text-sm">
               步驟：
               <ol className="list-decimal list-inside space-y-1">
-                <li>先把你的 LINE 機器人加為好友（LINE Developers 的 QR Code）。</li>
+                <li>先把機器人加為好友（LINE Developers 的 QR Code）。</li>
                 <li>按下方「產生綁定碼」，把 6 碼記下來。</li>
-                <li>到 LINE 與機器人的聊天視窗，傳送：<code>綁定 你的6碼</code></li>
-                <li>回到本頁按「重新整理」，看到「已綁定」就完成。</li>
+                <li>在 LINE 與機器人的聊天視窗傳送：<code>綁定 你的6碼</code></li>
+                <li>回到本頁按「重新整理」，看到「已綁定」即完成。</li>
               </ol>
             </div>
             <div className="flex items-center gap-3">
@@ -102,7 +118,7 @@ export default function BindLinePage() {
       {note && <div className="text-sm text-gray-700">{note}</div>}
 
       <p className="text-xs text-gray-500">
-        備註：綁定過程會把你的 LINE userId 安全地儲存在雲端，日後可用於預約通知；你可隨時請管理者刪除綁定。
+        備註：你可隨時解除綁定；解除後將不再收到預約通知（再次綁定可重新產生 6 碼）。
       </p>
     </main>
   );

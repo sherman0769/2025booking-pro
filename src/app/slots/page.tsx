@@ -196,7 +196,7 @@ export default function SlotsPage() {
       setMsg(null);
       setError(null);
       await ensureSignedIn();
-      const uid = auth.currentUser?.uid;
+      
       if (!uid) throw new Error('尚未登入');
 
       await runTransaction(db, async (tx) => {

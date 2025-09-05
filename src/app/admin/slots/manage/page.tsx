@@ -143,6 +143,20 @@ export default function AdminSlotManagePage() {
     } catch {}
   };
 
+  // 對學員本人的推播（管理端也會先嘗試讀取 lineUserId，讓本機也能送）
+  const notifyUser = async (uid: string, message: string) => {
+    try {
+      const snap = await getDoc(doc(db, 'userProfiles', uid));
+      const toLineUserId = snap.exists() ? (snap.data() as any)?.lineUserId ?? null : null;
+
+      await fetch('/api/line/notify-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, toLineUserId, message }),
+      });
+    } catch {}
+  };
+
   const toggleStatus = async (r: Row) => {
     setMsg(null);
     setError(null);
@@ -271,11 +285,30 @@ export default function AdminSlotManagePage() {
       setMsg("已從候補補位一人 ✅");
       await load();
 
+      // ➜ 通知學員本人（被補位的那位）
+      if (wlUid) {
+        const userMsg =
+          `🎟️ 候補補位成功
+` +
+          `服務：${r.serviceName}
+` +
+          `資源：${r.resourceName}
+` +
+          `時間：${fmt(r.startAt)} - ${fmt(r.endAt)}
+` +
+          `查詢：/me/bookings`;
+        notifyUser(wlUid, userMsg);
+      }
+
       const lineMsg =
-        `✅ 候補補位成功\n` +
-        `服務：${r.serviceName}\n` +
-        `資源：${r.resourceName}\n` +
-        `時間：${fmt(r.startAt)} - ${fmt(r.endAt)}\n`;
+        `✅ 候補補位成功
+` +
+        `服務：${r.serviceName}
+` +
+        `資源：${r.resourceName}
+` +
+        `時間：${fmt(r.startAt)} - ${fmt(r.endAt)}
+`;
       notifyAdmin(lineMsg);
     } catch (e: any) {
       setError(e?.message ?? String(e));
