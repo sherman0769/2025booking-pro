@@ -49,7 +49,6 @@ export default function SlotsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // 追蹤登入狀態
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
     return () => unsub();
@@ -59,7 +58,6 @@ export default function SlotsPage() {
     if (!auth.currentUser) await signInAnonymously(auth);
   };
 
-  // 載入未來 7 天的可預約時段
   const loadSlots = async () => {
     setLoading(true);
     setError(null);
@@ -121,8 +119,7 @@ export default function SlotsPage() {
 
   useEffect(() => {
     loadSlots();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fmt = (d: Date) =>
     d.toLocaleString('zh-TW', {
@@ -135,7 +132,6 @@ export default function SlotsPage() {
       hour12: false,
     });
 
-  // 伺服器端推播：管理員（失敗不影響主流程）
   const notifyAdmin = async (message: string) => {
     try {
       await fetch('/api/line/notify-admin', {
@@ -146,14 +142,11 @@ export default function SlotsPage() {
     } catch {}
   };
 
-  // 伺服器端推播：學員本人（若未綁定會被 API 略過）
-  // 本機也會先讀 userProfiles 取得 lineUserId 一併帶上，無 Admin 金鑰也能送
+  // 讓本機也能送（先嘗試讀自己的 lineUserId，一併帶給 API）
   const notifyUser = async (uid: string, message: string) => {
     try {
       const snap = await getDoc(doc(db, 'userProfiles', uid));
-      const toLineUserId = snap.exists()
-        ? (snap.data() as any)?.lineUserId ?? null
-        : null;
+      const toLineUserId = snap.exists() ? (snap.data() as any)?.lineUserId ?? null : null;
 
       await fetch('/api/line/notify-user', {
         method: 'POST',
@@ -170,7 +163,7 @@ export default function SlotsPage() {
       setError(null);
       await ensureSignedIn();
 
-      const uid = auth.currentUser?.uid;
+      const uid = auth.currentUser?.uid;   // ← 只在這裡宣告一次
       if (!uid) throw new Error('尚未登入');
 
       await runTransaction(db, async (tx) => {
@@ -216,16 +209,14 @@ export default function SlotsPage() {
 
       setMsg('預約已送出 ✅（容量已同步遞減）');
 
-      // 通知管理員
       const adminMsg =
         `📌 新預約\n` +
         `服務：${s.serviceName}\n` +
         `資源：${s.resourceName}\n` +
         `時間：${fmt(s.startAt)} - ${fmt(s.endAt)}\n` +
-        `UID：${auth.currentUser?.uid ?? ''}`;
+        `UID：${uid}`;
       notifyAdmin(adminMsg);
 
-      // 通知學員本人
       const userMsg =
         `✅ 預約成立\n` +
         `服務：${s.serviceName}\n` +
@@ -234,13 +225,13 @@ export default function SlotsPage() {
         `查詢：/me/bookings`;
       await notifyUser(uid, userMsg);
 
-      await loadSlots(); // 重新讀取，看到容量/狀態變化
+      await loadSlots();
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
   };
 
-  // 加入候補（固定 docId：waitlists/{slotId}_{uid}；重複加入會提示）
+  // 候補
   const waitlist = async (s: EnrichedSlot) => {
     try {
       await ensureSignedIn();
@@ -254,12 +245,7 @@ export default function SlotsPage() {
         return;
       }
 
-      await setDoc(ref, {
-        slotId: s.id,
-        uid,
-        createdAt: serverTimestamp(),
-      });
-
+      await setDoc(ref, { slotId: s.id, uid, createdAt: serverTimestamp() });
       setMsg('已加入候補名單 ✅');
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -276,29 +262,14 @@ export default function SlotsPage() {
       </div>
 
       <div className="flex gap-2">
-        <button
-          onClick={loadSlots}
-          className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-          disabled={loading}
-        >
+        <button onClick={loadSlots} className="px-4 py-2 rounded bg-black text-white disabled:opacity-50" disabled={loading}>
           {loading ? '載入中…' : '重新整理'}
         </button>
       </div>
 
-      {msg && (
-        <div className="p-3 bg-green-50 text-green-700 rounded border border-green-200">
-          {msg}
-        </div>
-      )}
-      {error && (
-        <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
-          {error}
-        </div>
-      )}
-
-      {!hasData && !loading && (
-        <div className="text-gray-500">未找到未來 7 天的可預約時段。</div>
-      )}
+      {msg && <div className="p-3 bg-green-50 text-green-700 rounded border border-green-200">{msg}</div>}
+      {error && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{error}</div>}
+      {!hasData && !loading && <div className="text-gray-500">未找到未來 7 天的可預約時段。</div>}
 
       <ul className="divide-y">
         {slots.map((s) => {
@@ -307,44 +278,23 @@ export default function SlotsPage() {
           const isFull = s.status === 'FULL' || cap <= 0;
 
           return (
-            <li
-              key={s.id}
-              className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
-            >
+            <li key={s.id} className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="space-y-1">
-                <div className="font-medium">
-                  {fmt(s.startAt)} — {fmt(s.endAt)}
-                </div>
-                <div className="text-sm text-gray-600">
-                  服務：{s.serviceName}　資源：{s.resourceName}
-                </div>
-                <div className="text-xs text-gray-500">
-                  狀態：{s.status}　容量：{cap}
-                </div>
+                <div className="font-medium">{fmt(s.startAt)} — {fmt(s.endAt)}</div>
+                <div className="text-sm text-gray-600">服務：{s.serviceName}　資源：{s.resourceName}</div>
+                <div className="text-xs text-gray-500">狀態：{s.status}　容量：{cap}</div>
               </div>
 
               {isOpen ? (
-                <button
-                  onClick={() => book(s)}
-                  className="px-4 py-2 rounded text-white bg-black"
-                  title="預約這個時段"
-                >
+                <button onClick={() => book(s)} className="px-4 py-2 rounded text-white bg-black" title="預約這個時段">
                   預約
                 </button>
               ) : isFull ? (
-                <button
-                  onClick={() => waitlist(s)}
-                  className="px-4 py-2 rounded text-white bg-black"
-                  title="加入候補名單"
-                >
+                <button onClick={() => waitlist(s)} className="px-4 py-2 rounded text-white bg-black" title="加入候補名單">
                   加入候補
                 </button>
               ) : (
-                <button
-                  disabled
-                  className="px-4 py-2 rounded text-white bg-black opacity-50 cursor-not-allowed"
-                  title="此時段不可預約"
-                >
+                <button disabled className="px-4 py-2 rounded text-white bg-black opacity-50 cursor-not-allowed" title="此時段不可預約">
                   不可預約
                 </button>
               )}
