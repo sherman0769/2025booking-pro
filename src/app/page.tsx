@@ -1,24 +1,31 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { auth } from "@/lib/firebase.client";
-import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
-import AuthButtons from "@/components/AuthButtons";
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { auth } from '@/lib/firebase.client';
+import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
+import AuthButtons from '@/components/AuthButtons';
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => onAuthStateChanged(auth, setUser), []);
+  const [authReady, setAuthReady] = useState(false);   // ← 新增
 
   useEffect(() => {
-    // 正在 Google redirect 流程時，暫停匿名登入，避免回來被覆蓋
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);                              // ← 首次拿到 Auth 状态才标记就绪
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     let skipAnon = false;
     try { skipAnon = sessionStorage.getItem('auth:redirect') === '1'; } catch {}
-    if (!skipAnon && !auth.currentUser) {
+    // 只有 auth 已就绪、没在 redirect、且当前没有用户，才匿名登录
+    if (authReady && !skipAnon && !auth.currentUser) {
       signInAnonymously(auth).catch(() => {});
     }
-  }, []);
+  }, [authReady]);
 
   const Item = ({ href, label, desc }: { href: string; label: string; desc: string }) => (
     <Link href={href} className="block rounded-2xl border p-4 hover:shadow-sm transition">
@@ -35,7 +42,7 @@ export default function Home() {
       <AuthButtons />
 
       <div className="text-sm text-gray-600">
-        目前 UID：{user?.uid ?? "(未登入)"}（未登入時會自動以匿名身分瀏覽，可隨時升級為 Google 登入）
+        目前 UID：{user?.uid ?? '(未登入)'}（未登入時會自動以匿名身分瀏覽，可隨時升級為 Google 登入）
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
