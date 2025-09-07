@@ -7,6 +7,18 @@ import {
   collection, doc, getDoc, getDocs, query, where, orderBy, limit, Timestamp,
 } from 'firebase/firestore';
 
+// --- CSV helpers ---
+function toCsvRow(vals: (string | number | null | undefined)[]) {
+  return vals.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
+}
+function downloadCsv(filename: string, lines: string[]) {
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Slots 型別（沿用舊版） */
 type SlotDoc = {
   resourceId: string;
@@ -32,7 +44,7 @@ export default function AdminReportsPage() {
     activeBookings: 0,
     utilization: 0,
   });
-  const [topSlots, setTopSlots] = useState<Array<{
+  const [topSlots, setTopSlots] = useState<Array<{ 
     id: string;
     startAt: Date;
     endAt: Date;
@@ -57,7 +69,7 @@ export default function AdminReportsPage() {
     skipped: 0,
     successRate: 0,
   });
-  const [recentPushes, setRecentPushes] = useState<Array<{
+  const [recentPushes, setRecentPushes] = useState<Array<{ 
     ts: Date | null;
     kind: 'admin' | 'user' | string;
     result: 'OK' | 'Skipped' | 'Failed';
@@ -278,6 +290,40 @@ export default function AdminReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
 
+  // 匯出「最新明細」CSV（依目前範圍 recentPushes）
+  const exportRecentCsv = () => {
+    const header = ['ts', 'kind', 'result', 'status', 'uid', 'to', 'env', 'preview'];
+    const rows = recentPushes.map((r) => [
+      r.ts ? r.ts.toISOString() : '',
+      r.kind,
+      r.result,
+      r.status ?? '',
+      r.uid ?? '',
+      r.to ?? '',
+      r.env ?? '',
+      r.preview ?? '',
+    ]);
+    const lines = [toCsvRow(header), ...rows.map(toCsvRow)];
+    downloadCsv(`notify_logs_${Date.now()}.csv`, lines);
+  };
+
+  // 匯出「彙總」CSV（依目前範圍 pushStats）
+  const exportSummaryCsv = () => {
+    const s = pushStats;
+    const lines = [
+      toCsvRow(['range', s.rangeText]),
+      toCsvRow(['total', s.total]),
+      toCsvRow(['adminTotal', s.adminTotal]),
+      toCsvRow(['userTotal', s.userTotal]),
+      toCsvRow(['ok', s.ok]),
+      toCsvRow(['failed', s.failed]),
+      toCsvRow(['skipped', s.skipped]),
+      toCsvRow(['successRate(%)', (s.successRate * 100).toFixed(1)]),
+      toCsvRow(['generatedAt', new Date().toISOString()]),
+    ];
+    downloadCsv(`notify_summary_${Date.now()}.csv`, lines);
+  };
+
   // —— 前端權限保護（403） ——
   if (role === null) return <main className="p-6">載入權限中…</main>;
   if (role !== 'ADMIN') {
@@ -306,7 +352,8 @@ export default function AdminReportsPage() {
           <Stat label="時段數" value={totals.slotCount} />
           <Stat label="總容量" value={totals.totalCapacity} />
           <Stat label="有效預約（PENDING+CONFIRMED）" value={totals.activeBookings} />
-          <Stat label="利用率" value={(totals.utilization * 100).toFixed(1) + '%'} />
+          <Stat label="利用率" value={(totals.utilization * 100).toFixed(1) + '%'}
+ />
         </div>
 
         <h3 className="text-base font-semibold mt-2">近期時段占用（前 8 筆）</h3>
@@ -381,7 +428,8 @@ export default function AdminReportsPage() {
           <Stat label="推播總數" value={pushStats.total} />
           <Stat label="管理員推播" value={pushStats.adminTotal} />
           <Stat label="學員推播" value={pushStats.userTotal} />
-          <Stat label="成功率（不含跳過）" value={(pushStats.successRate * 100).toFixed(1) + '%'} />
+          <Stat label="成功率（不含跳過）" value={(pushStats.successRate * 100).toFixed(1) + '%'}
+ />
         </div>
 
         <h3 className="text-base font-semibold mt-2">最新 20 筆推播明細</h3>
@@ -406,7 +454,7 @@ export default function AdminReportsPage() {
           ))}
         </ul>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={load}
             className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
@@ -414,12 +462,32 @@ export default function AdminReportsPage() {
           >
             {busy ? '載入中…' : '重新整理'}
           </button>
-          {err && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{err}</div>}
+          <button
+            onClick={exportRecentCsv}
+            className="px-4 py-2 rounded bg-black text-white"
+            title="匯出目前範圍的最新 20 筆推播明細"
+          >
+            匯出明細 CSV
+          </button>
+          <button
+            onClick={exportSummaryCsv}
+            className="px-4 py-2 rounded bg-black text-white"
+            title="匯出目前範圍的彙總統計"
+          >
+            匯出彙總 CSV
+          </button>
+
+          {err && (
+            <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
+              {err}
+            </div>
+          )}
         </div>
       </section>
     </main>
   );
 }
+
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
