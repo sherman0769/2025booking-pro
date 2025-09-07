@@ -140,4 +140,63 @@ service cloud.firestore {
 
 ## 待辦（Roadmap）
 
-會員制與 RBAC、金流、iCal/Google Calendar、通知中心（Email/SMS/LINE 多通道）、報表儀表板、黑名單與違約金、折扣碼/課包、Webhook 事件。
+會員制與 RBAC、金流、iCal/Google Calendar、通知中心（Email/SMS/LINE 多通道）、報表儀表板、黑名單與違約金、折扣碼/課包、Webhook 事件。---
+
+## LINE 綁定與通知（Production 操作手冊）
+
+本系統支援 **管理員**與**學員本人**的 LINE 推播。Production 環境啟用步驟如下。
+
+### 1) 建立 Messaging API 與環境變數
+- 建立 LINE **Messaging API** Channel（LINE Developers Console）
+- Vercel → Project → **Settings → Environment Variables**（Production 或 All Environments）新增：
+  - `LINE_CHANNEL_ACCESS_TOKEN`：Channel access token（long-lived）
+  - `LINE_CHANNEL_SECRET`：Channel secret
+  - `FIREBASE_SERVICE_ACCOUNT`：Service Account **JSON** 全文（保留換行）
+  - `LINE_ADMIN_USER_ID`：管理員的 **Your user ID**（U 開頭）
+- 儲存後 **Redeploy**（取消勾選 *Use existing Build Cache*）讓變數生效
+
+### 2) 設定 Webhook
+- Webhook URL：`https://<你的網域>/api/line/webhook`
+- LINE Developers → Messaging API → **Webhook settings**：
+  - 按 **Update**、**Verify**（顯示 Success）
+  - 將 **Use webhook** 開為 **Enabled**
+- 檢查健康端點：`/api/line/webhook` 應回 `{ ok: true, ... }` 與版本號（例如 `bind-expiry-10m-1`）
+
+### 3) 綁定學員（10 分鐘有效）
+- 學員（每個 UID）在網站開 **`/me/line`** → 按 **產生綁定碼**（頁面會顯示倒數 10 分鐘）
+- 到 LINE 機器人聊天室傳：`綁定 6碼`（例如：`綁定 ABC123`）
+- 回 `/me/line` 按 **重新整理**，出現「已綁定 LINE（userId: U…）」即完成  
+- 可隨時 **解除綁定**（同頁面按「解除綁定」）
+
+> 過期保護：`bindCodeCreatedAt` 超過 10 分鐘，webhook 會回「綁定碼已過期，請重新產生」。
+
+### 4) 通知觸發點（已內建）
+- **預約成功**：  
+  - 管理員：📌 新預約  
+  - 學員本人：✅ 預約成立
+- **取消預約**：  
+  - 管理員：⚠️ 使用者取消預約  
+  - 學員本人：❌ 已取消預約
+- **候補補位成功**：  
+  - 管理員：✅ 候補補位成功  
+  - 學員本人：🎟️ 候補到位成功
+
+### 5) 快速測試
+- 管理員推播：`/debug/line-admin` → 按「送出給管理員」應立即收到訊息  
+- 學員推播：`/me/line` 綁定後，在 `/slots` 預約任一時段（OPEN、容量>0），應同時收到「管理員」與「學員本人」兩則訊息  
+- 查版本：`/api/version` 會回目前部署的 commit、branch、環境
+
+### 6) 常見問題（FAQ）
+- **只收到管理員、不收學員**：該學員 UID 尚未在 **Production** 綁定 → `/me/line` 重新綁定  
+- **只收到學員、不收管理員**：Vercel 漏設 `LINE_ADMIN_USER_ID` 或值錯誤  
+- **Webhook 回「感謝您的訊息，無法回覆…」**：到 <https://manager.line.biz/> 關閉「自動回覆訊息」與「歡迎訊息」，回應模式選 **Bot**  
+- **Followers API 403**：屬於權限限制，本專案改為「綁定碼」流程，無需 followers API  
+- **索引錯誤（The query requires an index）**：建立 `waitlists(slotId ASC, createdAt ASC)` 複合索引  
+- **規則擋住**：Production 使用本 README 內「規則與角色」設定；管理頁需 ADMIN 角色（`/debug/grant-admin` 只供開發用途）  
+- **Vercel 一直重建舊版**：請推 **新 commit** 或在 Deployments 針對最新 commit Redeploy；不要在舊部署詳細頁重建
+
+### 7) 安全建議（上線前）
+- 關閉所有 Debug 頁面（/debug/*）或加管理者限制
+- 將 `slots/services/resources/orgs/locations` 的「寫入」只允許 ADMIN（已預設）
+- Rate limit 與稽核欄位（by/at）可視需要補強
+
