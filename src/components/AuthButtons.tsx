@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/firebase.client';
 import {
   GoogleAuthProvider,
@@ -19,6 +20,7 @@ function isMobileUA() {
 }
 
 export default function AuthButtons() {
+  const router = useRouter();
   const [uid, setUid] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [isAnon, setIsAnon] = useState<boolean>(false);
@@ -39,6 +41,7 @@ export default function AuthButtons() {
       .then((cred) => {
         if (cred?.user) {
           setNote(`歡迎回來，${cred.user.displayName ?? cred.user.email ?? ''}`);
+          router.refresh();
           setTimeout(() => setNote(''), 2000);
         }
       })
@@ -62,6 +65,7 @@ export default function AuthButtons() {
         await signInWithRedirect(auth, provider);
       } else {
         await signInWithPopup(auth, provider);
+        router.refresh();
       }
     } catch (e: any) {
       setNote(`登入失敗：${e?.code ?? ''} ${e?.message ?? e}`);
@@ -79,6 +83,7 @@ export default function AuthButtons() {
         await linkWithRedirect(auth.currentUser, provider);
       } else {
         await linkWithPopup(auth.currentUser, provider);
+        router.refresh();
       }
     } catch (e: any) {
       // 常見：auth/account-exists-with-different-credential 等，直接改走登入取代綁定
@@ -87,6 +92,7 @@ export default function AuthButtons() {
           await signInWithRedirect(auth, provider);
         } else {
           await signInWithPopup(auth, provider);
+          router.refresh();
         }
       } catch (e2: any) {
         setNote(`綁定/登入失敗：${e2?.code ?? ''} ${e2?.message ?? e2}`);
