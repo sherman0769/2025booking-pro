@@ -1,18 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "@/lib/firebase.client";
 import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
-const ALPH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去除易混淆字元
+const ALPH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 function genCode(n = 6) { let s = ""; for (let i = 0; i < n; i++) s += ALPH[Math.floor(Math.random() * ALPH.length)]; return s; }
+const BIND_VALID_MS = 10 * 60 * 1000; // 10 分鐘
 
 export default function BindLinePage() {
   const [user, setUser] = useState<User | null>(null);
   const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [bindCode, setBindCode] = useState<string | null>(null);
+  const [bindCreatedAt, setBindCreatedAt] = useState<Date | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
   const [note, setNote] = useState("");
+
+  // 每秒跳動一次，驅動倒數
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -34,9 +43,14 @@ export default function BindLinePage() {
         const data = snap.data() as any;
         setLineUserId(typeof data.lineUserId === "string" ? data.lineUserId : null);
         setBindCode(typeof data.bindCode === "string" ? data.bindCode : null);
+        // 可能是 Firestore Timestamp 或 ISO 字串
+        const ts: any = data.bindCodeCreatedAt ?? null;
+        const d: Date | null = ts?.toDate?.() ?? (ts ? new Date(ts) : null);
+        setBindCreatedAt(d);
       } else {
         setLineUserId(null);
         setBindCode(null);
+        setBindCreatedAt(null);
       }
     } finally { setNote(""); }
   };
@@ -52,18 +66,18 @@ export default function BindLinePage() {
         { merge: true }
       );
       setBindCode(code);
-      setNote("已產生綁定碼 ✅");
+      setBindCreatedAt(new Date()); // 立即給前端起算
+      setNote("已產生綁定碼 ✅（10 分鐘內有效）");
     } catch (e: any) { setNote("產生失敗：" + (e?.message ?? e)); }
   };
 
-  // 解除綁定（清除 lineUserId 與 bindCode）
   const unbind = async () => {
     setNote("解除綁定中…");
     try {
       if (!auth.currentUser) throw new Error("尚未登入");
       await setDoc(
         doc(db, "userProfiles", auth.currentUser.uid),
-        { lineUserId: null, bindCode: null, unboundAt: serverTimestamp() },
+        { lineUserId: null, bindCode: null, bindCodeCreatedAt: null, unboundAt: serverTimestamp() },
         { merge: true }
       );
       await reloadProfile();
@@ -71,45 +85,71 @@ export default function BindLinePage() {
     } catch (e: any) { setNote("解除失敗：" + (e?.message ?? e)); }
   };
 
+  // 倒數與過期狀態
+  const remainingMs = useMemo(() => {
+    if (!bindCode || !bindCreatedAt) return 0;
+    return Math.max(0, bindCreatedAt.getTime() + BIND_VALID_MS - now);
+  }, [bindCode, bindCreatedAt, now]);
+
+  const isExpired = bindCode != null && remainingMs <= 0;
+  const formatMMSS = (ms: number) => {
+    const total = Math.ceil(ms / 1000);
+    const m = Math.floor(total / 60).toString().padStart(2, "0");
+    const s = Math.floor(total % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
+
   return (
     <main className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">綁定 LINE 通知</h1>
-      <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? "(未登入)"}</div>
+      <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? "(未登入)"}（綁定只對此 UID 生效）</div>
 
+      {/* 已綁定狀態 */}
       {lineUserId ? (
         <div className="space-y-3">
           <div className="p-3 rounded border bg-green-50 text-green-700">
             已綁定 LINE（userId: {lineUserId}）
           </div>
           <div className="flex gap-2">
-            <button onClick={unbind} className="px-4 py-2 rounded bg-black text-white">
-              解除綁定
-            </button>
-            <button onClick={() => reloadProfile()} className="px-4 py-2 rounded bg-black text-white">
-              重新整理
-            </button>
+            <button onClick={unbind} className="px-4 py-2 rounded bg-black text-white">解除綁定</button>
+            <button onClick={() => reloadProfile()} className="px-4 py-2 rounded bg-black text-white">重新整理</button>
           </div>
         </div>
       ) : (
+        // 未綁定狀態
         <>
           <div className="space-y-2">
             <div className="text-sm">
               步驟：
               <ol className="list-decimal list-inside space-y-1">
-                <li>先把機器人加為好友（LINE Developers 的 QR Code）。</li>
-                <li>按下方「產生綁定碼」，把 6 碼記下來。</li>
-                <li>在 LINE 與機器人的聊天視窗傳送：<code>綁定 你的6碼</code></li>
+                <li>把機器人加為好友（LINE Developers 的 QR Code）。</li>
+                <li>按下方「產生綁定碼」。</li>
+                <li>到 LINE 與機器人聊天，傳送：<code>綁定 你的6碼</code></li>
                 <li>回到本頁按「重新整理」，看到「已綁定」即完成。</li>
               </ol>
             </div>
+
             <div className="flex items-center gap-3">
               <button onClick={makeCode} className="px-4 py-2 rounded bg-black text-white">產生綁定碼</button>
               <button onClick={() => reloadProfile()} className="px-4 py-2 rounded bg-black text-white">重新整理</button>
             </div>
-            {bindCode && (
-              <div className="p-3 rounded border font-mono text-lg">
-                你的綁定碼：<span className="font-bold">{bindCode}</span>
+
+            {/* 綁定碼與倒數 */}
+            {bindCode ? (
+              <div className={`p-3 rounded border font-mono text-lg ${isExpired ? "bg-red-50 border-red-200" : "bg-yellow-50 border-yellow-200"}`}>
+                <div className="font-bold">你的綁定碼：{bindCode}</div>
+                {!isExpired ? (
+                  <div className="text-sm">
+                    10 分鐘內有效，剩餘 <span className="font-semibold">{formatMMSS(remainingMs)}</span>
+                  </div>
+                ) : (
+                  <div className="text-sm text-red-700">
+                    綁定碼已過期，請重新產生新的綁定碼。
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="text-sm text-gray-600">尚未產生綁定碼（有效期 10 分鐘）。</div>
             )}
           </div>
         </>
@@ -118,7 +158,7 @@ export default function BindLinePage() {
       {note && <div className="text-sm text-gray-700">{note}</div>}
 
       <p className="text-xs text-gray-500">
-        備註：你可隨時解除綁定；解除後將不再收到預約通知（再次綁定可重新產生 6 碼）。
+        提醒：綁定碼有效期為 10 分鐘；綁定後即可在 LINE 接收預約通知。你可隨時解除綁定，日後再綁定亦可。
       </p>
     </main>
   );
