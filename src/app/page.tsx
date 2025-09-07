@@ -14,9 +14,14 @@ export default function Home() {
     return () => unsub();
   }, []);
 
-  // 開發/未登入時仍可匿名瀏覽；但頁面會提供「升級為 Google」按鈕
   useEffect(() => {
-    if (!auth.currentUser) signInAnonymously(auth).catch(() => {});
+    // 有 Redirect 旗標時，暫停匿名登入以避免打架
+    const skipAnon = (() => {
+      try { return sessionStorage.getItem('auth:redirect') === '1'; } catch { return false; }
+    })();
+    if (!skipAnon && !auth.currentUser) {
+      signInAnonymously(auth).catch(() => {});
+    }
   }, []);
 
   const Item = ({ href, label, desc }: { href: string; label: string; desc: string }) => (
@@ -31,7 +36,6 @@ export default function Home() {
     <main className="mx-auto max-w-3xl p-6 space-y-6">
       <h1 className="text-2xl font-bold">預約系統｜快速導覽</h1>
 
-      {/* 手機優先：登入/升級區塊（匿名也顯示） */}
       <AuthButtons />
 
       <div className="text-sm text-gray-600">
