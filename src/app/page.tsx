@@ -9,16 +9,12 @@ import AuthButtons from "@/components/AuthButtons";
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return () => unsub();
-  }, []);
+  useEffect(() => onAuthStateChanged(auth, setUser), []);
 
   useEffect(() => {
-    // 有 Redirect 旗標時，暫停匿名登入以避免打架
-    const skipAnon = (() => {
-      try { return sessionStorage.getItem('auth:redirect') === '1'; } catch { return false; }
-    })();
+    // 正在 Google redirect 流程時，暫停匿名登入，避免回來被覆蓋
+    let skipAnon = false;
+    try { skipAnon = sessionStorage.getItem('auth:redirect') === '1'; } catch {}
     if (!skipAnon && !auth.currentUser) {
       signInAnonymously(auth).catch(() => {});
     }
@@ -51,9 +47,7 @@ export default function Home() {
         <Item href="/me/line" label="綁定 LINE" desc="輸入 6 碼綁定你的 LINE，用於通知" />
       </div>
 
-      <p className="text-xs text-gray-500">
-        提醒：Production 建議關閉 /debug/* 頁面或僅限 ADMIN 可見。
-      </p>
+      <p className="text-xs text-gray-500">提醒：Production 建議關閉 /debug/* 頁面或僅限 ADMIN 可見。</p>
     </main>
   );
 }
