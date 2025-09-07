@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { auth } from '@/lib/firebase.client';
+import { useEffect, useState } from "react";
+import { auth } from "@/lib/firebase.client";
 import {
   GoogleAuthProvider,
   signInWithRedirect,
@@ -9,13 +9,13 @@ import {
   getRedirectResult,
   signOut,
   onAuthStateChanged,
-} from 'firebase/auth';
+} from "firebase/auth";
 
 export default function AuthButtons() {
   const [uid, setUid] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [isAnon, setIsAnon] = useState<boolean>(false);
-  const [note, setNote] = useState<string>('');
+  const [note, setNote] = useState<string>("");
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -26,38 +26,37 @@ export default function AuthButtons() {
     return () => unsub();
   }, []);
 
-  // 手機 Redirect 回來後拿結果（登入或連結），失敗就顯示訊息
+  // 手機 redirect 回來後處理結果（若無則忽略）
   useEffect(() => {
     getRedirectResult(auth).catch((e) => {
       setNote(`登入回跳錯誤：${e?.message ?? e}`);
-      setTimeout(() => setNote(''), 3000);
+      setTimeout(() => setNote(""), 3000);
     });
   }, []);
 
-  const googleProvider = new GoogleAuthProvider();
+  const provider = new GoogleAuthProvider();
 
   // 未登入：直接用 Google 登入
   const loginGoogle = async () => {
-    setNote('前往 Google 登入…');
-    await signInWithRedirect(auth, googleProvider);
+    setNote("前往 Google 登入…");
+    await signInWithRedirect(auth, provider);
   };
 
-  // 目前是匿名：把匿名帳號升級綁定到 Google（保留現有資料與 UID）
+  // 已匿名：把匿名帳號「升級/連結」到 Google（保留資料與 UID）
   const upgradeToGoogle = async () => {
     if (!auth.currentUser) return loginGoogle();
-    setNote('前往 Google 綁定…');
-    await linkWithRedirect(auth.currentUser, googleProvider);
+    setNote("前往 Google 綁定…");
+    await linkWithRedirect(auth.currentUser, provider);
   };
 
   const logout = async () => {
     await signOut(auth);
-    setNote('已登出');
-    setTimeout(() => setNote(''), 1500);
+    setNote("已登出");
+    setTimeout(() => setNote(""), 1500);
   };
 
   return (
     <div className="space-y-2">
-      {/* 情況 1：未登入 → 顯示 Google 登入 */}
       {!uid && (
         <button
           onClick={loginGoogle}
@@ -67,7 +66,6 @@ export default function AuthButtons() {
         </button>
       )}
 
-      {/* 情況 2：已登入匿名 → 顯示帳號卡片 + 「升級為 Google 登入」 */}
       {uid && isAnon && (
         <div className="space-y-2">
           <div className="flex items-center justify-between rounded-2xl border p-3">
@@ -88,7 +86,6 @@ export default function AuthButtons() {
         </div>
       )}
 
-      {/* 情況 3：已登入且非匿名（Google 等提供者） → 顯示帳號卡片 + 登出 */}
       {uid && !isAnon && (
         <div className="flex items-center justify-between rounded-2xl border p-3">
           <div className="text-sm">

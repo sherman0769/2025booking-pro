@@ -1,9 +1,10 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { auth } from '@/lib/firebase.client';
-import { onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { auth } from "@/lib/firebase.client";
+import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
+import AuthButtons from "@/components/AuthButtons";
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
@@ -13,18 +14,13 @@ export default function Home() {
     return () => unsub();
   }, []);
 
+  // 開發/未登入時仍可匿名瀏覽；但頁面會提供「升級為 Google」按鈕
   useEffect(() => {
-    // 自動匿名登入（若尚未登入）
-    if (!auth.currentUser) {
-      signInAnonymously(auth).catch(() => {});
-    }
+    if (!auth.currentUser) signInAnonymously(auth).catch(() => {});
   }, []);
 
   const Item = ({ href, label, desc }: { href: string; label: string; desc: string }) => (
-    <Link
-      href={href}
-      className="block rounded-2xl border p-4 hover:shadow-sm transition"
-    >
+    <Link href={href} className="block rounded-2xl border p-4 hover:shadow-sm transition">
       <div className="text-lg font-semibold">{label}</div>
       <div className="text-sm text-gray-600">{desc}</div>
       <div className="mt-2 text-blue-600">前往 →</div>
@@ -34,21 +30,25 @@ export default function Home() {
   return (
     <main className="mx-auto max-w-3xl p-6 space-y-6">
       <h1 className="text-2xl font-bold">預約系統｜快速導覽</h1>
+
+      {/* 手機優先：登入/升級區塊（匿名也顯示） */}
+      <AuthButtons />
+
       <div className="text-sm text-gray-600">
-        目前 UID：{user?.uid ?? '(未登入)'}（首頁會自動匿名登入）
+        目前 UID：{user?.uid ?? "(未登入)"}（未登入時會自動以匿名身分瀏覽，可隨時升級為 Google 登入）
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Item href="/slots" label="可預約時段" desc="查看未來 7 天可預約時段並一鍵預約" />
         <Item href="/me/bookings" label="我的預約" desc="查看/取消我建立的預約" />
         <Item href="/admin/slots" label="管理端｜排程產生器" desc="批量建立指定日期區間的時段" />
-        <Item href="/admin/slots/manage" label="管理端｜時段管理" desc="開關時段、調整容量" />
-        <Item href="/debug/seed" label="Debug｜建立範例資料" desc="一鍵產生示範 org/location/slot" />
-        <Item href="/debug/firestore" label="Debug｜Firestore 健康檢查" desc="匿名登入＋讀寫測試" />
+        <Item href="/admin/slots/manage" label="管理端｜時段管理" desc="開關時段、調整容量、候補補位" />
+        <Item href="/admin/reports" label="管理端｜報表" desc="推播/預約統計、日期範圍、CSV 匯出" />
+        <Item href="/me/line" label="綁定 LINE" desc="輸入 6 碼綁定你的 LINE，用於通知" />
       </div>
 
       <p className="text-xs text-gray-500">
-        提醒：目前未做角色限制（含匿名可用）。上線前會加上管理者保護與更嚴格的 Firestore 規則。
+        提醒：Production 建議關閉 /debug/* 頁面或僅限 ADMIN 可見。
       </p>
     </main>
   );
