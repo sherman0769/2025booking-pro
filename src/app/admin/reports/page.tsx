@@ -44,7 +44,7 @@ export default function AdminReportsPage() {
     activeBookings: 0,
     utilization: 0,
   });
-  const [topSlots, setTopSlots] = useState<Array<{ 
+  const [topSlots, setTopSlots] = useState<Array<{
     id: string;
     startAt: Date;
     endAt: Date;
@@ -69,7 +69,7 @@ export default function AdminReportsPage() {
     skipped: 0,
     successRate: 0,
   });
-  const [recentPushes, setRecentPushes] = useState<Array<{ 
+  const [recentPushes, setRecentPushes] = useState<Array<{
     ts: Date | null;
     kind: 'admin' | 'user' | string;
     result: 'OK' | 'Skipped' | 'Failed';
@@ -79,6 +79,9 @@ export default function AdminReportsPage() {
     preview?: string | null;
     env?: string | null;
   }>>([]);
+
+  // 供折線圖使用：按日彙整成功率（0~100）
+  const [rateSeries, setRateSeries] = useState<Array<{ label: string; rate: number }>>([]);
 
   // 登入 + 角色
   useEffect(() => {
@@ -221,7 +224,7 @@ export default function AdminReportsPage() {
       const sinceTs = Timestamp.fromDate(since);
       const untilTs = Timestamp.fromDate(until);
 
-      let qLogs = query(
+      const qLogs = query(
         collection(db, 'notifyLogs'),
         where('ts', '>=', sinceTs),
         where('ts', '<=', untilTs),
@@ -275,8 +278,29 @@ export default function AdminReportsPage() {
         rangeText: `${fmt(since)} ~ ${fmt(until)}`,
         total, adminTotal, userTotal, ok, failed, skipped, successRate,
       });
-
       setRecentPushes(logs.slice(0, 20));
+
+      // —— 2.1 生成「每日成功率」序列（提供折線圖）
+      // 先建每日桶（YYYY-MM-DD）
+      const bucket = new Map<string, { ok: number; fail: number }>();
+      for (const l of logs) {
+        if (!l.ts) continue;
+        const d = new Date(l.ts);
+        const key = d.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const cur = bucket.get(key) ?? { ok: 0, fail: 0 };
+        if (l.result === 'OK') cur.ok += 1;
+        else if (l.result === 'Failed') cur.fail += 1;
+        bucket.set(key, cur);
+      }
+      // 依日期升冪
+      const keys = Array.from(bucket.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+      const series = keys.map(k => {
+        const v = bucket.get(k)!;
+        const denomDay = v.ok + v.fail;
+        const rate = denomDay > 0 ? (v.ok / denomDay) * 100 : 0;
+        return { label: k, rate };
+      });
+      setRateSeries(series);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -352,8 +376,7 @@ export default function AdminReportsPage() {
           <Stat label="時段數" value={totals.slotCount} />
           <Stat label="總容量" value={totals.totalCapacity} />
           <Stat label="有效預約（PENDING+CONFIRMED）" value={totals.activeBookings} />
-          <Stat label="利用率" value={(totals.utilization * 100).toFixed(1) + '%'}
- />
+          <Stat label="利用率" value={(totals.utilization * 100).toFixed(1) + '%'} />
         </div>
 
         <h3 className="text-base font-semibold mt-2">近期時段占用（前 8 筆）</h3>
@@ -428,9 +451,11 @@ export default function AdminReportsPage() {
           <Stat label="推播總數" value={pushStats.total} />
           <Stat label="管理員推播" value={pushStats.adminTotal} />
           <Stat label="學員推播" value={pushStats.userTotal} />
-          <Stat label="成功率（不含跳過）" value={(pushStats.successRate * 100).toFixed(1) + '%'}
- />
+          <Stat label="成功率（不含跳過）" value={(pushStats.successRate * 100).toFixed(1) + '%'} />
         </div>
+
+        {/* 成功率折線圖（依日彙整） */}
+        <SuccessRateChart series={rateSeries} />
 
         <h3 className="text-base font-semibold mt-2">最新 20 筆推播明細</h3>
         <ul className="divide-y">
@@ -463,37 +488,107 @@ export default function AdminReportsPage() {
             {busy ? '載入中…' : '重新整理'}
           </button>
           <button
-            onClick={exportRecentCsv}
+            onClick={() => {
+              const header = ['ts', 'kind', 'result', 'status', 'uid', 'to', 'env', 'preview'];
+              const rows = recentPushes.map((r) => [
+                r.ts ? r.ts.toISOString() : '',
+                r.kind, r.result, r.status ?? '', r.uid ?? '', r.to ?? '', r.env ?? '', r.preview ?? '',
+              ]);
+              const lines = [toCsvRow(header), ...rows.map(toCsvRow)];
+              downloadCsv(`notify_logs_${Date.now()}.csv`, lines);
+            }}
             className="px-4 py-2 rounded bg-black text-white"
-            title="匯出目前範圍的最新 20 筆推播明細"
           >
             匯出明細 CSV
           </button>
           <button
-            onClick={exportSummaryCsv}
+            onClick={() => {
+              const s = pushStats;
+              const lines = [
+                toCsvRow(['range', s.rangeText]),
+                toCsvRow(['total', s.total]),
+                toCsvRow(['adminTotal', s.adminTotal]),
+                toCsvRow(['userTotal', s.userTotal]),
+                toCsvRow(['ok', s.ok]),
+                toCsvRow(['failed', s.failed]),
+                toCsvRow(['skipped', s.skipped]),
+                toCsvRow(['successRate(%)', (s.successRate * 100).toFixed(1)]),
+                toCsvRow(['generatedAt', new Date().toISOString()]),
+              ];
+              downloadCsv(`notify_summary_${Date.now()}.csv`, lines);
+            }}
             className="px-4 py-2 rounded bg-black text-white"
-            title="匯出目前範圍的彙總統計"
           >
             匯出彙總 CSV
           </button>
 
-          {err && (
-            <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
-              {err}
-            </div>
-          )}
+          {err && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{err}</div>}
         </div>
       </section>
     </main>
   );
 }
 
-
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-2xl border p-4">
       <div className="text-sm text-gray-600">{label}</div>
       <div className="text-2xl font-semibold break-all">{value}</div>
+    </div>
+  );
+}
+
+/** 簡易成功率折線圖（0~100%） */
+function SuccessRateChart({ series }: { series: Array<{ label: string; rate: number }> }) {
+  if (!series.length) {
+    return <div className="text-sm text-gray-500">此範圍內沒有可統計的推播資料。</div>;
+  }
+
+  const W = 720;
+  const H = 220;
+  const PAD = { l: 48, r: 12, t: 16, b: 40 };
+  const innerW = W - PAD.l - PAD.r;
+  const innerH = H - PAD.t - PAD.b;
+
+  const xs = series.map((_, i) => (series.length === 1 ? innerW / 2 : (i / (series.length - 1)) * innerW));
+  const ys = series.map(s => innerH - Math.round((s.rate / 100) * innerH));
+
+  const path = xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${PAD.l + x} ${PAD.t + ys[i]}`).join(' ');
+
+  // y 軸格線（每 20%）
+  const yTicks = [0, 20, 40, 60, 80, 100];
+
+  return (
+    <div className="rounded-2xl border p-3">
+      <div className="text-sm text-gray-600 mb-2">成功率（%）</div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Success Rate Line Chart">
+        {/* y 軸格線與標籤 */}
+        {yTicks.map((v, i) => {
+          const y = PAD.t + (innerH - (v / 100) * innerH);
+          return (
+            <g key={i}>
+              <line x1={PAD.l} y1={y} x2={PAD.l + innerW} y2={y} stroke="#eee" />
+              <text x={PAD.l - 8} y={y + 4} textAnchor="end" fontSize="10" fill="#666">{v}%</text>
+            </g>
+          );
+        })}
+        {/* x 軸標籤（最多顯示 12 個，避免重疊） */}
+        {series.map((s, i) => {
+          const x = PAD.l + xs[i];
+          const show = series.length <= 12 || i % Math.ceil(series.length / 12) === 0;
+          return show ? (
+            <text key={i} x={x} y={H - 8} fontSize="10" textAnchor="middle" fill="#666">
+              {s.label.slice(5)}{/* 只顯示 MM/DD */}
+            </text>
+          ) : null;
+        })}
+        {/* 折線 */}
+        <path d={path} fill="none" stroke="#111" strokeWidth="2" />
+        {/* 點 */}
+        {xs.map((x, i) => (
+          <circle key={i} cx={PAD.l + x} cy={PAD.t + ys[i]} r="3" fill="#111" />
+        ))}
+      </svg>
     </div>
   );
 }
