@@ -17,13 +17,15 @@ type SlotDoc = {
   capacity?: number;
 };
 
+type RangePreset = '24h' | '7d' | '30d' | 'custom';
+
 export default function AdminReportsPage() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<string | null>(null); // 'ADMIN' | 'MEMBER' | null
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // —— Slots 統計（沿用舊版） ——
+  // —— Slots 統計（固定「未來 7 天」） ——
   const [totals, setTotals] = useState({
     slotCount: 0,
     totalCapacity: 0,
@@ -41,7 +43,10 @@ export default function AdminReportsPage() {
     status: string;
   }>>([]);
 
-  // —— 推播統計（新） ——
+  // —— 推播統計（可調日期範圍） ——
+  const [preset, setPreset] = useState<RangePreset>('7d');
+  const [startInput, setStartInput] = useState<string>(''); // datetime-local
+  const [endInput, setEndInput] = useState<string>('');     // datetime-local
   const [pushStats, setPushStats] = useState({
     rangeText: '',
     total: 0,
@@ -104,19 +109,40 @@ export default function AdminReportsPage() {
     return out;
   };
 
+  // 由 preset / 自訂輸入，計算 notifyLogs 的時間範圍
+  const computeLogRange = () => {
+    const now = Date.now();
+    if (preset === '24h') {
+      return { since: new Date(now - 24 * 60 * 60 * 1000), until: new Date(now) };
+    }
+    if (preset === '7d') {
+      return { since: new Date(now - 7 * 24 * 60 * 60 * 1000), until: new Date(now) };
+    }
+    if (preset === '30d') {
+      return { since: new Date(now - 30 * 24 * 60 * 60 * 1000), until: new Date(now) };
+    }
+    // custom
+    const s = startInput ? new Date(startInput) : null;
+    const e = endInput ? new Date(endInput) : null;
+    return {
+      since: s ?? new Date(now - 7 * 24 * 60 * 60 * 1000),
+      until: e ?? new Date(now),
+    };
+  };
+
   const load = async () => {
     setBusy(true);
     setErr(null);
     try {
       await ensureSignedIn();
 
-      // ----- 1) 近 7 天 slots 統計 -----
-      const now = Timestamp.now();
-      const to = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+      // ----- 1) 近 7 天 slots 統計（固定） -----
+      const nowTs = Timestamp.now();
+      const to7d = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
       const qSlots = query(
         collection(db, 'slots'),
-        where('startAt', '>=', now),
-        where('startAt', '<=', to),
+        where('startAt', '>=', nowTs),
+        where('startAt', '<=', to7d),
         orderBy('startAt', 'asc'),
         limit(500),
       );
@@ -144,7 +170,6 @@ export default function AdminReportsPage() {
       const utilization = totalCapacity > 0 ? activeBookings / totalCapacity : 0;
 
       // 近期 8 筆 slots 概覽
-      // 名稱快取
       const nameCache = new Map<string, string>();
       const getName = async (col: 'services' | 'resources', id: string) => {
         const key = `${col}:${id}`;
@@ -179,13 +204,17 @@ export default function AdminReportsPage() {
       });
       setTopSlots(top);
 
-      // ----- 2) 近 7 天推播統計 -----
-      const since = Timestamp.fromDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-      const qLogs = query(
+      // ----- 2) 推播統計（依據範圍） -----
+      const { since, until } = computeLogRange();
+      const sinceTs = Timestamp.fromDate(since);
+      const untilTs = Timestamp.fromDate(until);
+
+      let qLogs = query(
         collection(db, 'notifyLogs'),
-        where('ts', '>=', since),
+        where('ts', '>=', sinceTs),
+        where('ts', '<=', untilTs),
         orderBy('ts', 'desc'),
-        limit(200),
+        limit(500),
       );
       const logSnap = await getDocs(qLogs);
 
@@ -231,7 +260,7 @@ export default function AdminReportsPage() {
       const successRate = denom > 0 ? ok / denom : 0;
 
       setPushStats({
-        rangeText: `近 7 天（${fmt(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))} ~ ${fmt(new Date())}）`,
+        rangeText: `${fmt(since)} ~ ${fmt(until)}`,
         total, adminTotal, userTotal, ok, failed, skipped, successRate,
       });
 
@@ -243,10 +272,11 @@ export default function AdminReportsPage() {
     }
   };
 
+  // preset 改變就重新載入（custom 由「套用」按鈕觸發）
   useEffect(() => {
-    load();
+    if (preset !== 'custom') load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [preset]);
 
   // —— 前端權限保護（403） ——
   if (role === null) return <main className="p-6">載入權限中…</main>;
@@ -266,10 +296,10 @@ export default function AdminReportsPage() {
 
   return (
     <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">管理端｜報表（未來 7 天 + 推播近 7 天）</h1>
+      <h1 className="text-2xl font-bold">管理端｜報表（未來 7 天 + 推播可選範圍）</h1>
       <div className="text-sm text-gray-600">目前 UID：{user?.uid ?? '(未登入)'}　角色：{role}</div>
 
-      {/* Slots 整體統計 */}
+      {/* Slots 統計（未來 7 天） */}
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">預約容量概覽（未來 7 天）</h2>
         <div className="grid gap-3 sm:grid-cols-4">
@@ -278,18 +308,6 @@ export default function AdminReportsPage() {
           <Stat label="有效預約（PENDING+CONFIRMED）" value={totals.activeBookings} />
           <Stat label="利用率" value={(totals.utilization * 100).toFixed(1) + '%'} />
         </div>
-
-        <div className="flex gap-2">
-          <button
-            onClick={load}
-            className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-            disabled={busy}
-          >
-            {busy ? '載入中…' : '重新整理'}
-          </button>
-        </div>
-
-        {err && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{err}</div>}
 
         <h3 className="text-base font-semibold mt-2">近期時段占用（前 8 筆）</h3>
         <ul className="divide-y">
@@ -306,14 +324,63 @@ export default function AdminReportsPage() {
         </ul>
       </section>
 
-      {/* 推播統計 */}
+      {/* 推播統計（可選範圍） */}
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">LINE 推播統計（{pushStats.rangeText}）</h2>
+        <div className="flex items-end gap-3 justify-between flex-wrap">
+          <h2 className="text-lg font-semibold">LINE 推播統計</h2>
+          <div className="flex items-end gap-2">
+            {/* 預設範圍選單 */}
+            <div className="flex rounded-xl border overflow-hidden">
+              <button
+                onClick={() => setPreset('24h')}
+                className={`px-3 py-2 text-sm ${preset==='24h'?'bg-black text-white':'bg-white'}`}
+              >近 24 小時</button>
+              <button
+                onClick={() => setPreset('7d')}
+                className={`px-3 py-2 text-sm ${preset==='7d'?'bg-black text-white':'bg-white'}`}
+              >近 7 天</button>
+              <button
+                onClick={() => setPreset('30d')}
+                className={`px-3 py-2 text-sm ${preset==='30d'?'bg-black text-white':'bg-white'}`}
+              >近 30 天</button>
+              <button
+                onClick={() => setPreset('custom')}
+                className={`px-3 py-2 text-sm ${preset==='custom'?'bg-black text-white':'bg-white'}`}
+              >自訂</button>
+            </div>
+
+            {/* 自訂區間（datetime-local） */}
+            {preset === 'custom' && (
+              <div className="flex items-end gap-2">
+                <label className="text-sm">
+                  <div className="text-xs text-gray-600">起</div>
+                  <input
+                    type="datetime-local"
+                    className="border rounded px-2 py-1"
+                    value={startInput}
+                    onChange={(e)=>setStartInput(e.target.value)}
+                  />
+                </label>
+                <label className="text-sm">
+                  <div className="text-xs text-gray-600">迄</div>
+                  <input
+                    type="datetime-local"
+                    className="border rounded px-2 py-1"
+                    value={endInput}
+                    onChange={(e)=>setEndInput(e.target.value)}
+                  />
+                </label>
+                <button onClick={load} className="px-3 py-2 rounded bg-black text-white">套用</button>
+              </div>
+            )}
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-5">
+          <Stat label="範圍" value={pushStats.rangeText || '—'} />
           <Stat label="推播總數" value={pushStats.total} />
           <Stat label="管理員推播" value={pushStats.adminTotal} />
           <Stat label="學員推播" value={pushStats.userTotal} />
-          <Stat label="成功 / 失敗" value={`${pushStats.ok} / ${pushStats.failed}`} />
           <Stat label="成功率（不含跳過）" value={(pushStats.successRate * 100).toFixed(1) + '%'} />
         </div>
 
@@ -338,6 +405,17 @@ export default function AdminReportsPage() {
             </li>
           ))}
         </ul>
+
+        <div className="flex gap-2">
+          <button
+            onClick={load}
+            className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+            disabled={busy}
+          >
+            {busy ? '載入中…' : '重新整理'}
+          </button>
+          {err && <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">{err}</div>}
+        </div>
       </section>
     </main>
   );
@@ -347,7 +425,7 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-2xl border p-4">
       <div className="text-sm text-gray-600">{label}</div>
-      <div className="text-2xl font-semibold">{value}</div>
+      <div className="text-2xl font-semibold break-all">{value}</div>
     </div>
   );
 }
